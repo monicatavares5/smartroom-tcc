@@ -1,0 +1,1 @@
+timestamp,esp_id,ip,seq,rssi,csi_len,sig_mode,mcs,channel,csi_mean_abs,first_word_invalid,csi_encoding,csi_hex,csi_bytes_recebidos,csi_valido

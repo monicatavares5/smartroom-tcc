@@ -1,0 +1,7 @@
+segundo,horario,pacotes_total,pacotes_formato,formatos_distintos,rssi_dbm,delta_rssi_db,desvio_csi,score_csi,limiar,estado,formato_utilizado
+0,2026-10-30T16:30:40,109,0,1,-46.00,,,,,SAIA DO QUARTO,
+1,2026-10-30T16:30:41,97,0,5,-45.00,,,,,SAIA DO QUARTO,
+2,2026-10-30T16:30:43,111,0,1,-44.00,,,,,SAIA DO QUARTO,
+3,2026-10-30T16:30:43,95,0,3,-44.00,,,,,SAIA DO QUARTO,
+4,2026-10-30T16:30:44,105,0,1,-44.00,,,,,SAIA DO QUARTO,
+5,2026-10-30T16:30:45,86,0,4,-46.00,,,,,CALIBRANDO QUARTO VAZIO,

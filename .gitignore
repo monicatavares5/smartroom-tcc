@@ -1,0 +1,21 @@
+# Ambiente virtual Python (recrie com: python -m venv venv && pip install -r software/requirements.txt)
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Build do ESP-IDF (gerado ao compilar)
+build/
+managed_components/
+
+# sdkconfig gerado localmente: contém nome e senha do Wi-Fi
+sdkconfig
+sdkconfig.old
+sdkconfig_*
+
+# Sistema
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
