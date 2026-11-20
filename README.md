@@ -6,10 +6,10 @@ Sistema experimental que usa placas ESP32-S3 para coletar CSI (Channel State Inf
 
 ```
 firmware/smartroom_node/   Firmware dos nós ESP32 (ESP-IDF), baseado no exemplo csi_recv_router do esp-csi
-software/                  Servidor, painel web, scripts de coleta e análise (Python)
-software/dados_csi/        Coletas CSI rotuladas e análises
-software/experimento_03/   Coletas por posição (centro, perto de cada ESP, quarto vazio)
-data/                      Coletas e gráficos dos primeiros testes
+software/smartroom_servidor.py   Servidor UDP + painel web (Python)
+software/calibracao/       Coletas por posição (quarto vazio, perto de cada ESP, centro)
+software/dados/            CSVs gerados pelo servidor a cada execução
+software/analise/          Scripts de análise offline, coletas e gráficos dos primeiros testes
 ```
 
 ## Firmware
@@ -23,7 +23,7 @@ idf.py menuconfig      # Example Connection Configuration → SSID e senha do Wi
 idf.py build flash monitor
 ```
 
-O arquivo `sdkconfig` não é versionado porque guarda o nome e a senha da rede Wi-Fi; ele é gerado pelo `menuconfig` a partir de `sdkconfig.defaults`. A pasta `historico/` guarda versões anteriores do `app_main.c`.
+O arquivo `sdkconfig` não é versionado porque guarda o nome e a senha da rede Wi-Fi; ele é gerado pelo `menuconfig` a partir de `sdkconfig.defaults`.
 
 ## Servidor e painel
 
@@ -32,12 +32,12 @@ cd software
 python -m venv venv
 venv\Scripts\activate            # Windows  (Linux/macOS: source venv/bin/activate)
 pip install -r requirements.txt
-python smartroom_servidor_entrega_final_localizacao_ajustada.py
+python smartroom_servidor.py
 ```
 
 O servidor escuta os nós na porta UDP 5005 e o painel fica em http://localhost:8080.
 
-Os arquivos `smartroom_servidor_v2.py` a `v7_7` e `presenca_tempo_real*.py` são as versões intermediárias desenvolvidas ao longo do trabalho.
+As versões intermediárias desenvolvidas ao longo do trabalho foram removidas do diretório e continuam disponíveis no histórico do git (commit `3213293`).
 
 ## Base
 
