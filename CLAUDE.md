@@ -1,114 +1,111 @@
 # CLAUDE.md — SmartRoom (TCC)
 
-Detecção de presença e estimativa de região de uma pessoa num quarto de ~4 × 3 m usando CSI + RSSI de Wi-Fi coletados por 4 placas **ESP32-S3** (ESP_A, ESP_B, ESP_C, ESP_D). As placas mandam pacotes JSON por **UDP** para um servidor Python que serve um **painel web** (HTML/JS embutido no próprio `.py`). Projeto de TCC: código experimental, em português, sem testes automatizados.
+Detecção de presença e estimativa de região de uma pessoa num quarto de ~4 × 3 m usando CSI + RSSI de Wi-Fi coletados por 4 placas **ESP32-S3**. As placas mandam pacotes binários por **UDP** para um servidor Python (biblioteca padrão + numpy) que serve um **painel web** atualizado 10x por segundo. Projeto de TCC: código, comentários, UI e commits em português.
 
 ## Estrutura
 
 ```
-firmware/smartroom_node/          Firmware dos 4 nós (projeto ESP-IDF)
-  main/app_main.c                   código do nó (CSI → JSON → UDP)
-  sdkconfig.defaults, CMakeLists.txt, main/idf_component.yml, dependencies.lock
+requisitos.ps1                    instala/configura o ambiente (o "requirements" do projeto)
+smartroom.ps1 / smartroom.cmd     roda o servidor, diagnostica, grava/atualiza o firmware, replay
+docs/protocolo.md                 ★ contrato do protocolo v2 placa ↔ servidor (firmware e servidor seguem este arquivo)
+docs/resultados_teste_guiado_20261120.md   métricas do teste guiado (base dos parâmetros atuais; usar no TCC)
+firmware/smartroom_node/          projeto ESP-IDF v6.0.3 (um único firmware para as 4 placas)
+  main/app_main.c                   inicialização e ligação dos módulos
+  main/sr_protocolo.h               structs dos pacotes v2 (espelho de docs/protocolo.md)
+  main/sr_csi.c/.h                  CSI, callback, fila, ping ao gateway
+  main/sr_rede.c/.h                 descoberta do servidor e envio dos pacotes
+  main/sr_saude.c/.h                eventos de Wi-Fi, watchdog/reinícios, pacote STATUS
+  main/sr_ota.c/.h                  atualização pelo Wi-Fi
+  main/Kconfig.projbuild            opções do menu "SmartRoom" (menuconfig)
+  sdkconfig.defaults                flash 4 MB, tabela de partição com 2 OTA, rollback, HTTP OTA, CSI
 software/
-  smartroom_servidor.py           ★ Servidor UDP + HTTP + painel web (HTML/JS inline na string COLLECT_HTML)
-  requirements.txt
-  modelo_localizacao.joblib       modelo ML experimental (só /api/location_ml; painel não usa)
-  coletar_localizacao.py          cliente que rotula coletas via POST /api/label no servidor rodando
-  calibracao/                     CSVs por posição (vazio_inicio, perto_esp_a..d, centro, vazio_fim) lidos pelo servidor
-  dados/                          CSVs gerados pelo servidor a cada execução (não é código)
-  analise/                        scripts offline (não fazem parte do sistema em tempo real)
-    analisar_calibracao.py          compara os CSVs de calibracao/ → relatorio_calibracao.csv
-    analisar_espectro.py            análise espectral de um smartroom_v53_rotulado_*.csv (argumento)
-    comparar_vazio_centro.py, comparar_5_testes.py   usam testes_presenca/
-    analisar_csi_serial.py, analisar_movimento.py, detectar_presenca.py   usam dados_serial/ (formato serial antigo, coluna csi_data)
-    dados_serial/                   coletas e gráficos dos primeiros testes via USB (30/10)
-    testes_presenca/                5 coletas vazio/centro
+  smartroom_servidor.py             entrada fina (python smartroom_servidor.py --help)
+  placas.json                       MAC → ESP_A…ESP_D (gerado pela gravação; editável)
+  requirements.txt                  numpy (servidor) + pacotes da análise offline e dos testes
+  smartroom/                        pacote do servidor
+    __main__.py                       CLI e montagem (threads supervisionadas)
+    config.py                         portas, caminhos, IDs das placas
+    protocolo.py                      leitura/montagem de pacotes v2 (binário) e v1 (JSON legado)
+    placas.py                         RegistroPlacas (MAC → ID, atribui ID livre a MAC novo e salva)
+    nucleo.py                         Sistema: estado, processamento das amostras, CSV, detectores (10x/s)
+    tempo_real.py                     ★ DetectorTempoReal (CSI multivariado + HMM) e LocalizadorRTI (grade bayesiana + Kalman)
+    csi.py                            amplitude/espectro do CSI
+    teste_guiado.py                   TesteGuiado: sequência cronometrada (~6,5 min) que fala as instruções no painel, calibra e marca os rótulos
+    presenca.py                       DetectorPresenca (V7.4) e LocalizadorProximidade — "clássico", mantido para comparação
+    monitor.py                        MonitorPlacas: saúde, avisos com histerese, eventos
+    rede.py                           receptor UDP, descoberta, supervisão de threads
+    ota.py                            GerenciadorOTA (HTTP temporário 8081 + comando às placas)
+    replay.py                         reproduz CSV gravado como se fossem as placas
+    gravacao.py                       CsvSeguro (escrita em lote, tolera arquivo bloqueado)
+    web.py + web/                     HTTP do painel (index.html, app.js, style.css) e API
+  tests/                            pytest (protocolo, presença, monitor, sistema com rede/HTTP/replay)
+  calibracao/                       CSVs por posição (usados só pela análise offline)
+  dados/                            CSVs gravados a cada execução (não é código)
+  analise/                          scripts offline (avaliar_tempo_real.py = métricas de um teste rotulado), dados antigos
 ```
 
-Não há frontend separado (sem Node/npm): o HTML/CSS/JS está inline no servidor. Nenhum script importa outro; todos usam caminhos relativos ao próprio arquivo.
-
-Versões intermediárias do servidor, scripts serial antigos e `firmware/smartroom_node/historico/` foram removidos; estão no commit `3213293` (`git show 3213293:<caminho>`). Lá os nomes antigos eram: `smartroom_servidor_entrega_final_localizacao_ajustada.py`, `experimento_03/`, `dados_csi/`, `data/`.
+Versões antigas (servidores v2…v7_7, monolito `smartroom_servidor.py` de ~1200 linhas, firmware com IP fixo) estão no histórico do git.
 
 ## Arquitetura
 
 ```
-ESP32-S3 (x4)                         PC (Windows)
- conecta no hotspot Wi-Fi  ──UDP:5005──>  servidor Python
- faz ping 100 Hz no gateway               ├─ thread UDP: parse JSON, grava CSV, atualiza estado
- captura CSI das respostas                └─ HTTP 127.0.0.1:8080: painel + API JSON
- envia JSON {esp_id, seq, rssi, mcs, channel, csi(hex), ...}
+ESP32-S3 (x4, mesmo firmware)                 PC (Windows)
+ conecta no hotspot                            servidor (threads supervisionadas: reiniciam se falharem)
+ procura ──broadcast UDP 5006──>               ├─ descoberta: anuncia {"smartroom":"servidor","porta":5005} 1x/s em cada interface
+        <──anúncio / resposta──                │   e responde às procuras
+ ping 20 Hz no gateway → CSI                   ├─ receptor UDP 5005 → Sistema.receber() → CSV + detector + monitor
+ envia 1 de cada 2 CSI (binário) ──UDP 5005──> ├─ laço 10 Hz: detectores e localização (monitor e CSV 1 Hz)
+ STATUS a cada 5 s ──UDP 5005──>               ├─ OTA: HTTP 0.0.0.0:8081 temporário + comando UDP às placas
+ OTA: baixa de http://PC:8081 <──comando──     └─ HTTP 127.0.0.1:8080: painel + /api/stream (SSE 10x/s)
 ```
 
-- **Firmware**: baseado no exemplo `csi_recv_router` do [esp-csi](https://github.com/espressif/esp-csi). Conecta via `example_connect()` (SSID/senha do `menuconfig`), pinga o gateway a 100 Hz (`CONFIG_SEND_FREQUENCY`) para gerar tráfego, e a callback de CSI enfileira amostras que a task `smartroom_udp_task` envia como JSON. Constantes em `app_main.c`:
-  - `SMARTROOM_NODE_ID` — `"ESP_A"`…`"ESP_D"` (**muda por placa**; hoje está `"ESP_D"`)
-  - `SMARTROOM_SERVER_IP` — `"172.20.10.10"` (IP do PC na rede do hotspot do iPhone)
-  - `SMARTROOM_SERVER_PORT` — `5005`
-- **Servidor** (`software/smartroom_servidor.py`):
-  - `udp_listener()` — recebe pacotes; ignora `esp_id` fora de `NODES`; grava `dados/smartroom_csi_<timestamp>.csv` (bruto) e `dados/smartroom_v53_rotulado_<timestamp>.csv` (métricas espectrais).
-  - `presence_v7()` — **detector de presença usado no painel**. Exige calibração manual de 60 s com o quarto vazio (botão no painel → `POST /api/presence_v7/calibrate`). Compara RSSI/amplitude CSI de janelas de 8 s com a linha de base; presença se índice ≥ 1.0 por 5 s, vazio se < 0.6 por 8 s (histerese).
-  - `location_proximity()` — **localização usada no painel**: heurística "placa com índice dominante" → `perto_a/b/c/d`, senão `centro`. Não é triangulação.
-  - Outros detectores antigos continuam no arquivo mas o painel não usa: `presence_status` (`/api/presence`), `v6_estimate` (`/api/location`), `location_ml` (`/api/location_ml`, modelo `.joblib`).
-- **Endpoints usados pelo painel**: `GET /`, `GET /api/status`, `GET /api/presence_v7`, `GET /api/localizacao`, `POST /api/presence_v7/calibrate`.
+- **Protocolo**: ver `docs/protocolo.md`. Cabeçalho de 12 bytes com o **MAC** (identidade da placa); CSI tipo 1; STATUS tipo 2 (uptime, quedas de Wi-Fi, erros de envio, heap, RSSI do AP, motivo do reinício, estado do OTA, versão do firmware). O servidor também aceita o JSON v1 das placas antigas. Ao mudar o protocolo, mude `docs/protocolo.md`, `main/sr_protocolo.h` e `smartroom/protocolo.py` juntos (há testes de tamanho das structs).
+- **Identidade**: `software/placas.json` (MAC → ID). A gravação por USB registra o MAC lido pelo esptool. MAC desconhecido recebe o primeiro ID livre (e um aviso no painel para conferir o canto).
+- **Firmware**: descoberta sem IP fixo; reconexão de Wi-Fi a cada 10 s e reinício após 120 s sem Wi-Fi; reinício se ficar 30 s sem CSI; recria o socket após erros seguidos; rollback de OTA (o firmware novo só se marca válido depois de achar o servidor). Opções no `menuconfig` → "SmartRoom".
+- **Servidor**: `Sistema` (nucleo.py) não depende de rede/HTTP — rede.py e replay.py alimentam; web.py lê `Sistema.estado()` (cache recalculado 10x/s em `Sistema.atualizar()`; o monitor e o descarregar do CSV rodam 1x/s). Relógio injetável (`Relogio`) para replay acelerado e testes. O CSV bruto tem a coluna `rotulo` (marcada no painel em "Teste rotulado").
+- **Detector em tempo real** (tempo_real.py, o que o painel mostra; detalhes na docstring do módulo): por placa, forma do espectro `x = ln(|H|+0,5) − média` nas 51 subportadoras úteis do LLTF (remove o ganho automático); resíduo contra a média do quarto vazio por `sig_mode`; numa janela de 1 s, três escores z padronizados pela calibração — movimento (ln da variância temporal), forma (ln da distância de Mahalanobis com covariância Ledoit–Wolf) e RSSI. Escore global S = máximo. Decisão por HMM de 2 estados em log-odds (LLR assimétrico, limiar τ = quantil 95% de S no vazio + 1, limitado a [2,5; 6]; média do vazio = mediana por subportadora; descarta os 10 s iniciais da calibração; `sensibilidade` ∈ [−1, 1] desloca τ em até 1,5); presença se P ≥ 0,85, vazio se P ≤ 0,15. Linha de base se adapta devagar só após 30 s de vazio confiante. **Ambiente alterado**: forma > τ em ≥ 3 placas com movimento médio < 1 por 20 s → aviso "recalibre" (não muda a decisão). KAPPA_SOBE/DESCE = 1,5/1,0.
+- **Localização contínua** (LocalizadorRTI): modelo de tomografia de rádio — cada enlace iPhone→placa é sensível perto do seu segmento (gaussiana de σ = 0,70 m); posterior (κ = 12) numa grade de 5 cm comparando o vetor de evidências normalizado; média/covariância vão para um Kalman 2-D de velocidade constante. Geometria da sala em `config.SALA` (2,5 × 3,5 m, iPhone no centro). Região: `centro` se a < 0,5 m do iPhone, senão `perto_` da placa mais próxima.
+- **Clássico** (presenca.py, V7.4): RSSI/amplitude média em janelas de 8 s, presença ≥ 1,0 por 5 s, vazio < 0,6 por 8 s; roda em paralelo só para comparação (aparece numa linha do painel e no avaliador).
+- **Monitor** (monitor.py): status por placa (`ok`/`atencao`/`critico`/`offline`/`aguardando`), sinal pela mediana do RSSI (Ótimo ≥ −60, Bom ≥ −70, Fraco ≥ −78), pacotes/s, perda pela `seq`, CSI válido, quedas, reinícios, versão do firmware e OTA. Avisos só depois de 5 s (histerese). Limiares no topo do arquivo.
+- **API**: `GET /api/estado`, `GET /api/stream` (SSE 10x/s; `monitor` vem só 1 a cada 10 mensagens), `GET /api/monitor`, `GET /api/placas`, `POST /api/calibrar` (calibra os dois detectores), `POST /api/rotulo` (alias `/api/label`), `POST /api/sensibilidade`, `POST /api/teste/iniciar`, `POST /api/teste/parar`, `POST /api/ota`.
 
-## Como rodar o backend + frontend
-
-Requer Python 3.10+.
+## Comandos
 
 ```powershell
-cd software
-python -m venv venv
-venv\Scripts\activate
-pip install -r requirements.txt
-pip install scikit-learn   # opcional: só para o modelo .joblib (location_ml), não usado pelo painel final
-python smartroom_servidor.py
+.\requisitos.ps1                 # instala o que falta: Python (winget), venv, pacotes, firewall (UDP 5005/5006, TCP 8081)
+.\requisitos.ps1 -Firmware       # + ESP-IDF v6.0.3 (winget Espressif.EIM-CLI + eim install), ~8 GB
+.\requisitos.ps1 -Verificar      # só relata (saída 1 se falta algo)
+.\smartroom.ps1                  # confere requisitos (chama requisitos.ps1 se faltar), inicia servidor e abre o painel
+.\smartroom.ps1 -Verificar       # diagnóstico: requisitos, rede e 8 s escutando as placas (--diagnostico)
+.\smartroom.ps1 -Firmware        # compila 1x e grava as 4 placas por USB, registrando os MACs
+.\smartroom.ps1 -Firmware -Ota   # compila e atualiza pelo Wi-Fi as placas online (servidor aberto)
+.\smartroom.ps1 -Replay software\dados\smartroom_csi_20261120_213225.csv -Velocidade 3   # painel sem placas
+
+# Avaliação de um teste rotulado (dentro de software/, com o venv):
+python analise\avaliar_tempo_real.py dados\smartroom_csi_<data>.csv [--buscar]   # acerto, falsos alarmes, atraso, erro de posição; --buscar acha os melhores parâmetros
 ```
 
-- Painel: http://localhost:8080 (só no próprio PC — o HTTP faz bind em `127.0.0.1`; para abrir de outro aparelho, trocar para `'0.0.0.0'` no `ThreadingHTTPServer(...)` no fim do arquivo).
-- O terminal imprime uma linha por pacote recebido (`ESP_A | IP | RSSI | seq | CSI 128 bytes | valido=True`). Se nada aparece, o problema é rede/firewall (ver abaixo).
-- Uso: esperar as 4 placas ficarem **Online** → sair do quarto → **Calibrar ambiente vazio · 60 s** → entrar no quarto.
-- Ctrl+C encerra.
+Servidor direto (dentro de `software/`, com o venv): `python smartroom_servidor.py [--verbose] [--resumo S] [--diagnostico S] [--replay CSV --velocidade N --inicio S --repetir] [--sem-csv] [--abrir]`.
 
-## Como conectar as placas (Wi-Fi) ao computador
+Testes: `cd software; venv\Scripts\python -m pytest -q` (34 testes, ~6 s; usam portas livres e não tocam em `dados/` nem em `placas.json`; `test_tempo_real.py` gera CSI sintético com quarto vazio, pessoa parada e andando).
 
-A rede usada no TCC é o **hotspot de um iPhone** (sub-rede `172.20.10.0/28`, gateway `172.20.10.1`). PC e as 4 ESP32 precisam estar na **mesma rede**.
+ESP-IDF: ativar com o script do EIM (`C:\Espressif\tools\Microsoft.v6.0.3.PowerShell_profile.ps1`, caminho em `C:\Espressif\tools\eim_idf.json` → `activationScript`); o `export.ps1` do esp-idf **não** ativa o `idf.py` nessa instalação. `requisitos.ps1 -CaminhoEspIdf` devolve o script certo.
 
-1. **Ligar o hotspot** no iPhone (ativar "Maximizar compatibilidade" para usar 2,4 GHz — o ESP32-S3 não conecta em 5 GHz).
-2. **Conectar o PC** ao hotspot e ver o IP:
-   ```powershell
-   ipconfig
-   ```
-   O firmware envia para `172.20.10.10`. Duas opções:
-   - Fixar o IP do PC: Configurações → Rede → Wi-Fi → (rede do hotspot) → Atribuição de IP → Manual: IP `172.20.10.10`, máscara `255.255.255.240`, gateway/DNS `172.20.10.1`; **ou**
-   - Alterar `SMARTROOM_SERVER_IP` em `app_main.c` para o IP que o PC recebeu e regravar as 4 placas.
-3. **Liberar o firewall do Windows** para UDP 5005 (PowerShell como administrador; o hotspot costuma ser classificado como rede "Pública"):
-   ```powershell
-   New-NetFirewallRule -DisplayName "SmartRoom UDP 5005" -Direction Inbound -Protocol UDP -LocalPort 5005 -Action Allow -Profile Any
-   ```
-4. **Gravar o firmware** em cada placa (ESP-IDF instalado, `IDF_PATH` configurado; rodar no "ESP-IDF PowerShell/CMD"):
-   ```powershell
-   cd firmware\smartroom_node
-   idf.py set-target esp32s3
-   idf.py menuconfig          # Example Connection Configuration → WiFi SSID / WiFi Password do hotspot
-   ```
-   Para **cada** placa: editar `SMARTROOM_NODE_ID` em `main/app_main.c` (`ESP_A`, `ESP_B`, `ESP_C`, `ESP_D`), plugar no USB e:
-   ```powershell
-   idf.py -p COMx build flash monitor
-   ```
-   No monitor deve aparecer `got ip:172.20.10.x, gw: 172.20.10.1`. Saia do monitor com `Ctrl+]`.
-5. **Posicionar** as placas nos cantos do quarto: A = superior esquerdo, B = superior direito, C = inferior esquerdo, D = inferior direito (é assim que o mapa do painel desenha). Alimentar por USB/fonte.
-6. Rodar o servidor e conferir as 4 placas Online no painel.
+## Pegadinhas
 
-`sdkconfig` não é versionado (contém SSID/senha); é gerado a partir de `sdkconfig.defaults` pelo `menuconfig`. Nunca commitar.
-
-## Pegadinhas conhecidas
-
-- `--treino` aponta por padrão para `dados/smartroom_csi_20261101_191222.csv`, que não existe mais (a pasta onde estava foi removida; está no commit `3213293`). O servidor só avisa `Arquivo nao encontrado`. Só afeta `/api/location` (V6), não usado pelo painel.
-- `requirements.txt` não tem `scikit-learn`; sem ele o `.joblib` não carrega (só afeta `/api/location_ml`).
-- A rota `/coleta` serve o mesmo painel principal (a coleta guiada da V7.7 foi removida nesta versão).
-- Calibração e coleta exigem as **4** placas online (pacote nos últimos 5 s).
-- Mudou de rede (outro roteador)? Ajuste `SMARTROOM_SERVER_IP` e regrave; o CSI vem das respostas de ping do gateway, então o hotspot/roteador também deve ficar fixo durante calibração e uso.
+- `sdkconfig` (local, contém SSID/senha, fora do git) tem prioridade sobre `sdkconfig.defaults`. O `smartroom.ps1 -Firmware` recria o `sdkconfig` quando o defaults é mais novo, preservando o Wi-Fi. Ao testar builds, compile numa cópia fora do repositório.
+- Placas com firmware antigo (JSON, IP fixo `172.20.10.10`) não participam da descoberta nem do OTA: grave por USB uma vez.
+- A primeira gravação v2 muda a tabela de partições (2 OTA, flash 4 MB): precisa ser por USB.
+- A descoberta depende de broadcast no hotspot. Se o anúncio não chegar, a placa acha o servidor pela procura dela (precisa da regra UDP 5006).
+- "Presença" logo depois da calibração com o quarto supostamente vazio quase sempre é a própria pessoa voltando ao notebook (21/11: mudança real nos enlaces A/B/C 5 s após o fim da calibração, mesma MCS, canal e RSSI estáveis). Notebook fora do quarto ou use o teste guiado. Perfil do vazio por MCS (`POR_MCS`) foi testado e não ajudou — desligado.
+- Calibração exige as 4 placas online. O hotspot deve ficar fixo durante calibração e uso (o CSI vem das respostas de ping do gateway).
+- Os `.ps1` são UTF-8 **com BOM** (acentos no Windows PowerShell 5.1) — manter ao editar.
 
 ## Convenções
 
-- Código, comentários, UI e commits em português.
-- Nova versão do servidor: prefira editar o arquivo final em vez de criar mais um `smartroom_servidor_vX.py`.
-- Não commitar `venv/`, `build/`, `managed_components/`, `sdkconfig`.
+- Português em código, UI e commits. Trabalhar direto na `main`; commit só quando a usuária pedir.
+- Nada de criar `smartroom_servidor_vX.py`: edite o pacote `smartroom/` e rode os testes.
+- Resultados atuais (teste guiado de 20/11, trecho válido até 623 s): acurácia balanceada 88,8% (clássico 76,2%), pessoa detectada 94,4%, vazio 83,1%, região 81,5%, erro de posição 0,50 m; B é a placa fraca. Ao mudar parâmetros, rode `python analise\avaliar_tempo_real.py dados\smartroom_csi_20261120_232804.csv --ate 623` e compare.
+- Avaliação confiável exige rótulos confiáveis: use o **teste guiado** (painel → "Teste rotulado"); o avaliador calibra no trecho `vazio_calibracao`. No teste manual de 20/11 (`dados/smartroom_csi_20261120_222103.csv`, calibração ~3410 s) o trecho "vazio" parece ter tido gente no quarto (a pessoa clicava no notebook), então não serve como verdade.
+- Ao mexer no detector, valide também com dados reais: replay (`--inicio` pula a montagem) e `analise/avaliar_tempo_real.py` num teste rotulado. A gravação `dados/smartroom_csi_20261120_213225.csv` não tem rótulos e tem trechos de montagem (mesas sendo mexidas antes de ~1015 s e depois de ~1540 s).
+- Não commitar `venv/`, `build/`, `managed_components/`, `sdkconfig`, `eim_config.toml`.

@@ -19,3 +19,9 @@ Thumbs.db
 desktop.ini
 .vscode/
 .idea/
+
+# Testes
+.pytest_cache/
+
+# Config gerada pelo instalador do ESP-IDF (eim) ao rodar nesta pasta
+eim_config.toml

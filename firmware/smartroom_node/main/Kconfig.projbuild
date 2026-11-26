@@ -1,0 +1,52 @@
+menu "SmartRoom"
+
+    config SMARTROOM_PING_HZ
+        int "Frequencia do ping ao roteador (Hz)"
+        range 1 100
+        default 20
+        help
+            Cada resposta do roteador gera um CSI. Menos ping = menos uso do ar.
+
+    config SMARTROOM_ENVIAR_A_CADA
+        int "Enviar 1 a cada N callbacks de CSI"
+        range 1 100
+        default 2
+        help
+            O campo seq conta todos os callbacks, inclusive os nao enviados.
+
+    config SMARTROOM_DATA_PORT
+        int "Porta UDP de dados (padrao se o anuncio nao trouxer a porta)"
+        range 1 65535
+        default 5005
+
+    config SMARTROOM_DISCOVERY_PORT
+        int "Porta UDP de descoberta e comando de OTA"
+        range 1 65535
+        default 5006
+
+    config SMARTROOM_SERVER_STALE_MS
+        int "Procura o servidor de novo apos este tempo sem anuncio (ms)"
+        range 1000 600000
+        default 10000
+
+    config SMARTROOM_WIFI_RETRY_MS
+        int "Intervalo entre tentativas de reconexao do Wi-Fi (ms)"
+        range 1000 600000
+        default 10000
+
+    config SMARTROOM_WIFI_RESTART_MS
+        int "Reinicia a placa apos este tempo sem Wi-Fi (ms)"
+        range 10000 3600000
+        default 120000
+
+    config SMARTROOM_CSI_STALL_RESTART_MS
+        int "Reinicia a placa apos este tempo sem CSI com Wi-Fi conectado (ms)"
+        range 5000 3600000
+        default 30000
+
+    config SMARTROOM_STATUS_PERIOD_MS
+        int "Periodo do pacote STATUS (ms)"
+        range 1000 600000
+        default 5000
+
+endmenu

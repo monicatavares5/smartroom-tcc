@@ -8,6 +8,9 @@ add_compile_options(-fdiagnostics-color=always)
 # This example uses an extra component for common functions such as Wi-Fi and Ethernet connection.
 set(EXTRA_COMPONENT_DIRS $ENV{IDF_PATH}/examples/common_components/protocol_examples_common)
 
+# Versao do firmware (STATUS.versao_fw e procura "fw"); suba a cada OTA
+set(PROJECT_VER "2.0.0")
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
 message("EXTRA_COMPONENT_DIRS: " ${EXTRA_COMPONENT_DIRS})

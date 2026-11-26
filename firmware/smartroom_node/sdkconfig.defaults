@@ -49,3 +49,20 @@ CONFIG_ESP32_WIFI_DYNAMIC_TX_BUFFER_NUM=32
 #
 CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240=y
 CONFIG_ESP32S3_DEFAULT_CPU_FREQ_MHZ=240
+
+#
+# SmartRoom: espera o hotspot indefinidamente em vez de desistir apos 6 tentativas
+#
+CONFIG_EXAMPLE_WIFI_CONN_MAX_RETRY=1000000
+
+#
+# SmartRoom: flash de 4 MB com factory + ota_0 + ota_1 (1 MB cada)
+#
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_TWO_OTA=y
+
+#
+# SmartRoom: OTA por HTTP na rede local, com rollback se o firmware novo nao achar o servidor
+#
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
